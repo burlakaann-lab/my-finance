@@ -18,7 +18,7 @@ from functools import wraps
 from pathlib import Path
 
 from beancount import loader
-from beancount.core.data import Open
+from beancount.core.data import Open, Transaction
 from flask import Flask, abort, make_response, redirect, render_template_string, request, send_file, session
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -73,6 +73,7 @@ LAYOUT = """<!doctype html>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Фінанси">
 <style>
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #8884}
 :root { color-scheme: light dark; }
 body { font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; max-width: 28rem; margin-inline: auto; }
 h1 { font-size: 1.4rem; margin: 0 0 1rem; }
@@ -227,7 +228,7 @@ def logout():
 
 
 def appbar(user):
-    return (f'<div class="appbar"><span>{html.escape(user)}</span><a href="/add">+ Готівка</a>'
+    return (f'<div class="appbar"><span>{html.escape(user)}</span><a href="/add">+ Готівка</a><a href="/cash">Готівка: список</a>'
             f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf_token()}">'
             '<button type="submit">Вийти</button></form></div>')
 
@@ -269,6 +270,18 @@ ADD_FORM = """
   <input id="day" type="date" name="day" min="{{ start }}" max="{{ today }}" value="{{ form.day }}" required>
   <button type="submit">Додати</button>
 </form>
+"""
+
+CASH_LIST = """
+<p><a href="/">← До звіту</a> · <a href="/add">+ Додати</a></p>
+<h1>Готівкові витрати</h1>
+{% if rows %}
+<p>Разом: <b>{{ total }} зл</b> ({{ rows|length }})</p>
+<table>
+  <tr><th>Дата</th><th>Що</th><th>Категорія</th><th>Хто</th><th>Сума</th></tr>
+  {% for r in rows %}<tr><td>{{ r.day }}</td><td>{{ r.description }}</td><td>{{ r.category }}</td><td>{{ r.user }}</td><td>{{ r.amount }}</td></tr>{% endfor %}
+</table>
+{% else %}<p>Поки що немає жодної готівкової витрати.</p>{% endif %}
 """
 
 ADDED = """
@@ -357,6 +370,22 @@ def add_submit():
     log(f"готівка: {session['user']} {data['amount']} {data['category']}")
     return page("Додано", ADDED, amount=f"{data['amount']:.2f}".replace(".", ","),
                 category=report.category_name(data["category"]), day=data["day"].isoformat())
+
+
+@app.get("/cash")
+@login_required
+def cash_list():
+    entries, _, _ = loader.load_file(str(LEDGER))
+    rows, total = [], Decimal(0)
+    for e in entries:
+        if isinstance(e, Transaction) and e.meta.get("added-by"):
+            posting = next(p for p in e.postings if p.account.startswith("Expenses:"))
+            total += posting.units.number
+            rows.append({"day": e.date.strftime("%d.%m.%Y"), "description": e.narration,
+                         "category": report.category_name(posting.account), "user": e.meta["added-by"],
+                         "amount": f"{posting.units.number:.2f}".replace(".", ","), "d": e.date})
+    rows.sort(key=lambda r: r["d"], reverse=True)
+    return page("Готівкові витрати", CASH_LIST, rows=rows, total=f"{total:.2f}".replace(".", ","))
 
 
 @app.get("/manifest.webmanifest")
