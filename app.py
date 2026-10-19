@@ -4,6 +4,7 @@
 Звіт будує report.py, готівку застосунок дописує в cash.beancount і одразу перевіряє облік.
 """
 
+import hashlib
 import hmac
 import html
 import os
@@ -18,7 +19,7 @@ from functools import wraps
 from pathlib import Path
 
 from beancount import loader
-from beancount.core.data import Open, Transaction
+from beancount.core.data import Open
 from flask import Flask, abort, make_response, redirect, render_template_string, request, send_file, session
 from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -254,9 +255,9 @@ def expense_accounts():
 
 ADD_FORM = """
 <p><a href="/">← До звіту</a></p>
-<h1>Додати готівку</h1>
+<h1>{{ heading }}</h1>
 {% if error %}<p class="err">{{ error }}</p>{% endif %}
-<form method="post" action="/add">
+<form method="post" action="{{ action }}">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <label for="amount">Сума, зл</label>
   <input id="amount" name="amount" inputmode="decimal" autocomplete="off" required placeholder="45,00" value="{{ form.amount }}">
@@ -268,8 +269,14 @@ ADD_FORM = """
   <input id="description" name="description" maxlength="60" autocomplete="off" value="{{ form.description }}">
   <label for="day">Дата</label>
   <input id="day" type="date" name="day" min="{{ start }}" max="{{ today }}" value="{{ form.day }}" required>
-  <button type="submit">Додати</button>
+  <button type="submit">{{ button }}</button>
 </form>
+{% if delete_action %}
+<form method="post" action="{{ delete_action }}" onsubmit="return confirm('Видалити цю витрату?')">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button type="submit" style="background:#b91c1c">Видалити</button>
+</form>
+{% endif %}
 """
 
 CASH_LIST = """
@@ -278,8 +285,8 @@ CASH_LIST = """
 {% if rows %}
 <p>Разом: <b>{{ total }} зл</b> ({{ rows|length }})</p>
 <table>
-  <tr><th>Дата</th><th>Що</th><th>Категорія</th><th>Хто</th><th>Сума</th></tr>
-  {% for r in rows %}<tr><td>{{ r.day }}</td><td>{{ r.description }}</td><td>{{ r.category }}</td><td>{{ r.user }}</td><td>{{ r.amount }}</td></tr>{% endfor %}
+  <tr><th>Дата</th><th>Що</th><th>Категорія</th><th>Хто</th><th>Сума</th><th></th></tr>
+  {% for r in rows %}<tr><td>{{ r.day }}</td><td>{{ r.description }}</td><td>{{ r.category }}</td><td>{{ r.user }}</td><td>{{ r.amount }}</td><td><a href="/cash/{{ r.id }}/edit">Змінити</a></td></tr>{% endfor %}
 </table>
 {% else %}<p>Поки що немає жодної готівкової витрати.</p>{% endif %}
 """
@@ -291,10 +298,11 @@ ADDED = """
 """
 
 
-def add_page(error=None, form=None, status=200):
+def add_page(error=None, form=None, status=200, heading="Додати готівку", action="/add", button="Додати", delete_action=None):
     accounts = expense_accounts()
     form = form or {"amount": "", "category": accounts[0], "description": "", "day": date.today().isoformat()}
-    return page("Додати готівку", ADD_FORM, status, csrf=csrf_token(), error=error, form=form,
+    return page(heading, ADD_FORM, status, csrf=csrf_token(), error=error, form=form,
+                heading=heading, action=action, button=button, delete_action=delete_action,
                 categories=[(a, report.category_name(a)) for a in accounts],
                 start=START_DATE.isoformat(), today=date.today().isoformat())
 
@@ -372,20 +380,109 @@ def add_submit():
                 category=report.category_name(data["category"]), day=data["day"].isoformat())
 
 
+def cash_blocks():
+    """Файл готівки як (шапка, список записів). Кожен запис — текст одного блоку."""
+    text = CASH.read_text(encoding="utf-8") if CASH.exists() else CASH_HEADER
+    parts = [b.strip("\n") for b in re.split(r"\n\s*\n", text) if b.strip()]
+    header = [b for b in parts if not re.match(r"\d{4}-\d\d-\d\d ", b)]
+    return header, [b for b in parts if re.match(r"\d{4}-\d\d-\d\d ", b)]
+
+
+def block_id(block):
+    return hashlib.sha1(block.encode()).hexdigest()[:10]
+
+
+def parse_block(block):
+    m = re.match(r'(\d{4}-\d\d-\d\d) \* "(.*)"\n\s+added-by: "(.*)"\n\s+(Expenses:\S+)\s+(\d+\.\d\d) PLN', block)
+    if not m:
+        return None
+    return {"day": date.fromisoformat(m[1]), "description": m[2], "user": m[3], "category": m[4],
+            "amount": Decimal(m[5])}
+
+
+def save_cash(header, blocks):
+    """Записує файл і перевіряє облік. Якщо є помилка, повертає файл як був."""
+    with LOCK:
+        old = CASH.read_text(encoding="utf-8") if CASH.exists() else CASH_HEADER
+        write_atomic("\n\n".join(header + blocks).rstrip("\n") + "\n")
+        _, errors, _ = loader.load_file(str(LEDGER))
+        if errors:
+            write_atomic(old)
+            raise ValueError(str(errors[0]))
+
+
+def find_block(bid):
+    header, blocks = cash_blocks()
+    for i, b in enumerate(blocks):
+        if block_id(b) == bid:
+            return header, blocks, i
+    abort(404)
+
+
 @app.get("/cash")
 @login_required
 def cash_list():
-    entries, _, _ = loader.load_file(str(LEDGER))
     rows, total = [], Decimal(0)
-    for e in entries:
-        if isinstance(e, Transaction) and e.meta.get("added-by"):
-            posting = next(p for p in e.postings if p.account.startswith("Expenses:"))
-            total += posting.units.number
-            rows.append({"day": e.date.strftime("%d.%m.%Y"), "description": e.narration,
-                         "category": report.category_name(posting.account), "user": e.meta["added-by"],
-                         "amount": f"{posting.units.number:.2f}".replace(".", ","), "d": e.date})
+    for b in cash_blocks()[1]:
+        d = parse_block(b)
+        if not d:
+            continue
+        total += d["amount"]
+        rows.append({"id": block_id(b), "day": d["day"].strftime("%d.%m.%Y"), "description": d["description"],
+                     "category": report.category_name(d["category"]), "user": d["user"],
+                     "amount": f"{d['amount']:.2f}".replace(".", ","), "d": d["day"]})
     rows.sort(key=lambda r: r["d"], reverse=True)
     return page("Готівкові витрати", CASH_LIST, rows=rows, total=f"{total:.2f}".replace(".", ","))
+
+
+def edit_page(bid, error=None, form=None, status=200):
+    _, blocks, i = find_block(bid)
+    d = parse_block(blocks[i])
+    form = form or {"amount": f"{d['amount']:.2f}".replace(".", ","), "category": d["category"],
+                    "description": "" if d["description"] == "Готівка" else d["description"],
+                    "day": d["day"].isoformat()}
+    return add_page(error, form, status, heading="Змінити готівку", action=f"/cash/{bid}/edit",
+                    button="Зберегти", delete_action=f"/cash/{bid}/delete")
+
+
+@app.get("/cash/<bid>/edit")
+@login_required
+def cash_edit_form(bid):
+    return edit_page(bid)
+
+
+@app.post("/cash/<bid>/edit")
+@login_required
+def cash_edit(bid):
+    check_csrf()
+    header, blocks, i = find_block(bid)
+    old = parse_block(blocks[i])
+    data, error = parse_cash_form(request.form, expense_accounts())
+    if error:
+        return edit_page(bid, error, {k: request.form.get(k, "") for k in ("amount", "category", "description", "day")}, 400)
+    blocks[i] = format_entry(data, old["user"]).strip("\n")
+    try:
+        save_cash(header, blocks)
+    except ValueError as exc:
+        log(f"зміну не записано, облік має помилку: {exc}")
+        return edit_page(bid, "Не вдалося записати: облік не пройшов перевірку. Нічого не змінено.", None, 500)
+    log(f"готівка змінена: {session['user']} {data['amount']} {data['category']}")
+    return redirect("/cash")
+
+
+@app.post("/cash/<bid>/delete")
+@login_required
+def cash_delete(bid):
+    check_csrf()
+    header, blocks, i = find_block(bid)
+    removed = blocks.pop(i)
+    try:
+        save_cash(header, blocks)
+    except ValueError as exc:
+        log(f"видалення не записано, облік має помилку: {exc}")
+        abort(500)
+    log(f"готівка видалена: {session['user']} {removed.splitlines()[0]}")
+    return redirect("/cash")
 
 
 @app.get("/manifest.webmanifest")
