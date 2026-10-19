@@ -22,4 +22,37 @@ option "operating_currency" "PLN"
   Assets:Банк                 4500.00 PLN
   Equity:Початковий-Залишок  -4500.00 PLN
 
+; Збережені запити. Місяць 10 неповний: дивіться дату останньої операції в запиті 2.
+
+2026-07-31 query "Витрати-за-категоріями" "
+  SELECT year AS \"рік\", month AS \"місяць\", account AS \"категорія\", sum(number) AS \"сума\"
+  WHERE account ~ '^Expenses:'
+  GROUP BY year, month, account
+  ORDER BY year, month, account"
+
+2026-07-31 query "Норма-заощаджень" "
+  SELECT year AS \"рік\", month AS \"місяць\",
+    -sum(number * decimal(account ~ '^Income:')) AS \"дохід\",
+    sum(number * decimal(account ~ '^Expenses:')) AS \"витрати\",
+    -sum(number) AS \"відкладено\",
+    round(-sum(number) / -sum(number * decimal(account ~ '^Income:')) * 100, 1) AS \"відсоток\",
+    max(date) AS \"остання_операція\"
+  WHERE account ~ '^(Income|Expenses):'
+  GROUP BY year, month
+  ORDER BY year, month"
+
+2026-07-31 query "Фіксовані-і-змінні" "
+  SELECT year AS \"рік\", month AS \"місяць\",
+    sum(number * decimal('fixed' IN tags)) AS \"фіксовані\",
+    sum(number * decimal('fixed' NOT IN tags)) AS \"змінні\",
+    sum(number) AS \"разом\"
+  WHERE account ~ '^Expenses:'
+  GROUP BY year, month
+  ORDER BY year, month"
+
+2026-07-31 query "Без-категорії" "
+  SELECT year AS \"рік\", month AS \"місяць\", date AS \"дата\", narration AS \"опис\", number AS \"сума\"
+  WHERE account = 'Expenses:Без-Категорії'
+  ORDER BY date"
+
 include "transactions.beancount"
