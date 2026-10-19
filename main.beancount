@@ -2,6 +2,7 @@ option "title" "Фінанси Олі"
 option "operating_currency" "PLN"
 
 2026-07-31 open Assets:Банк                  PLN
+2026-07-31 open Assets:Готівка               PLN
 2026-07-31 open Equity:Початковий-Залишок    PLN
 
 2026-07-31 open Income:Зарплата              PLN
@@ -56,3 +57,4 @@ option "operating_currency" "PLN"
   ORDER BY date"
 
 include "transactions.beancount"
+include "cash.beancount"

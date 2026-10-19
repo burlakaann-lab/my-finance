@@ -3,3 +3,5 @@ transactions.beancount
 report.html
 .venv/
 __pycache__/
+cash.beancount
+.env
