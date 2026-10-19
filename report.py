@@ -243,12 +243,12 @@ def build_html(months):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Фінанси Олі</title>
+<title>Фінанси Олі і Марка</title>
 <style>{CSS}</style>
 </head>
 <body data-default="{default_id}">
 <main>
-  <h1>Фінанси Олі</h1>
+  <h1>Фінанси Олі і Марка</h1>
   <p class="period">Дані з {day_label(first)} до {day_label(last)} {last.year}. Усі суми в злотих.</p>
   <nav class="tabs" aria-label="Місяць">{''.join(tabs)}</nav>
   {sections}
