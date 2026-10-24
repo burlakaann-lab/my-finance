@@ -1,7 +1,7 @@
 """Де лежать transactions.beancount і cash.beancount.
 
 Локально це звичайні файли поруч із кодом. На Vercel диск тимчасовий, тому обидва файли
-зберігаємо в безкоштовному Redis (Upstash, Vercel Marketplace) і перед кожним запитом
+зберігаємо в безкоштовному Neon Postgres (Vercel Marketplace) і перед кожним запитом
 кладемо в тимчасову папку. Працюємо через urllib зі стандартної бібліотеки, нових пакетів не потрібно.
 """
 
@@ -11,24 +11,31 @@ import shutil
 import tempfile
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
-URL = os.environ.get("KV_REST_API_URL") or os.environ.get("UPSTASH_REDIS_REST_URL") or ""
-TOKEN = os.environ.get("KV_REST_API_TOKEN") or os.environ.get("UPSTASH_REDIS_REST_TOKEN") or ""
-REMOTE = bool(URL and TOKEN)
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or ""
+REMOTE = bool(DATABASE_URL)
+# Neon приймає SQL по HTTPS на тому ж хості, що й база. NEON_SQL_URL потрібен лише для тестів.
+ENDPOINT = os.environ.get("NEON_SQL_URL") or (f"https://{urlsplit(DATABASE_URL).hostname}/sql" if REMOTE else "")
 
-KEYS = {"transactions.beancount": "finance:transactions", "cash.beancount": "finance:cash"}
+NAMES = ("transactions.beancount", "cash.beancount")
 WORKDIR = Path(tempfile.gettempdir()) / "ledger"
+_table_ready = False
 
 
-def command(*args):
+def sql(query, params=()):
     request = urllib.request.Request(
-        URL, data=json.dumps(list(args)).encode(), method="POST",
-        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"})
+        ENDPOINT, data=json.dumps({"query": query, "params": list(params)}).encode(), method="POST",
+        headers={"Neon-Connection-String": DATABASE_URL, "Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=10) as response:
-        body = json.load(response)
-    if "error" in body:
-        raise RuntimeError(body["error"])
-    return body["result"]
+        return json.load(response)["rows"]
+
+
+def ensure_table():
+    global _table_ready
+    if not _table_ready:
+        sql("CREATE TABLE IF NOT EXISTS ledger_files (name text PRIMARY KEY, body text NOT NULL)")
+        _table_ready = True
 
 
 def prepare(root):
@@ -39,8 +46,10 @@ def prepare(root):
 
 def pull(cash_header):
     """Кладе актуальні файли з бази у тимчасову папку."""
-    for name, key in KEYS.items():
-        text = command("GET", key)
+    ensure_table()
+    stored = {row["name"]: row["body"] for row in sql("SELECT name, body FROM ledger_files")}
+    for name in NAMES:
+        text = stored.get(name)
         if text is None:
             text = cash_header if name == "cash.beancount" else ""
         path = WORKDIR / name
@@ -49,4 +58,6 @@ def pull(cash_header):
 
 
 def push(name, text):
-    command("SET", KEYS[name], text)
+    ensure_table()
+    sql("INSERT INTO ledger_files (name, body) VALUES ($1, $2) "
+        "ON CONFLICT (name) DO UPDATE SET body = EXCLUDED.body", [name, text])

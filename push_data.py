@@ -1,4 +1,4 @@
-"""Заливає локальні transactions.beancount і cash.beancount у базу (Upstash Redis), яку читає Vercel.
+"""Заливає локальні transactions.beancount і cash.beancount у базу (Neon Postgres), яку читає Vercel.
 
 Запуск після кожного імпорту: ./push_data.sh
 """
@@ -11,9 +11,9 @@ import store
 ROOT = Path(__file__).parent
 
 if not store.REMOTE:
-    sys.exit("Немає KV_REST_API_URL і KV_REST_API_TOKEN у .env. Див. .env.example")
+    sys.exit("Немає DATABASE_URL у .env. Див. .env.example")
 
-for name in store.KEYS:
+for name in store.NAMES:
     path = ROOT / name
     if not path.exists():
         print(f"Пропускаю {name}: файлу немає")
