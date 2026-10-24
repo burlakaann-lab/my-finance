@@ -25,10 +25,16 @@ from markupsafe import Markup
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import report
+import store
 
 ROOT = Path(__file__).parent
 LEDGER = ROOT / "main.beancount"
 CASH = ROOT / "cash.beancount"
+if store.REMOTE:  # на Vercel дані лежать у базі, а працюємо з копією в тимчасовій папці
+    store.prepare(ROOT)
+    LEDGER = store.WORKDIR / "main.beancount"
+    CASH = store.WORKDIR / "cash.beancount"
+    report.LEDGER = LEDGER
 CASH_HEADER = "; Готівкові витрати, додані з телефона через app.py. У git не потрапляє.\n"
 CASH_ACCOUNT = "Assets:Готівка"
 START_DATE = date(2026, 8, 1)  # виписка починається з 1 серпня
@@ -152,6 +158,12 @@ def note_fail(ip):
 
 def log(message):
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}", file=sys.stderr, flush=True)
+
+
+@app.before_request
+def pull_data():
+    if store.REMOTE and not request.path.startswith("/icon-") and request.path != "/manifest.webmanifest":
+        store.pull(CASH_HEADER)
 
 
 @app.before_request
@@ -349,10 +361,21 @@ def append_cash(entry):
     with LOCK:
         old = CASH.read_text(encoding="utf-8") if CASH.exists() else CASH_HEADER
         write_atomic(old.rstrip("\n") + "\n\n" + entry)
-        _, errors, _ = loader.load_file(str(LEDGER))
-        if errors:
+        commit(old)
+
+
+def commit(old):
+    """Перевіряє облік, а тоді зберігає файл готівки в базі. Якщо щось не так, повертає файл як був."""
+    _, errors, _ = loader.load_file(str(LEDGER))
+    if errors:
+        write_atomic(old)
+        raise ValueError(str(errors[0]))
+    if store.REMOTE:
+        try:
+            store.push("cash.beancount", CASH.read_text(encoding="utf-8"))
+        except Exception as exc:
             write_atomic(old)
-            raise ValueError(str(errors[0]))
+            raise ValueError(f"база не прийняла запис: {exc}")
 
 
 @app.get("/add")
@@ -405,10 +428,7 @@ def save_cash(header, blocks):
     with LOCK:
         old = CASH.read_text(encoding="utf-8") if CASH.exists() else CASH_HEADER
         write_atomic("\n\n".join(header + blocks).rstrip("\n") + "\n")
-        _, errors, _ = loader.load_file(str(LEDGER))
-        if errors:
-            write_atomic(old)
-            raise ValueError(str(errors[0]))
+        commit(old)
 
 
 def find_block(bid):
