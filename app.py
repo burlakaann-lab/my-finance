@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 import threading
 import time
 from datetime import date, timedelta
@@ -55,6 +56,9 @@ def require_env(name, min_len):
 
 
 USERS = {"Оля": require_env("OLYA_PASSWORD", 12), "Марко": require_env("MARKO_PASSWORD", 12)}
+
+SYNC_TOKEN = require_env("SYNC_TOKEN", 32) if store.REMOTE else ""
+SYNC_LIMIT = 2 * 1024 * 1024
 
 app = Flask(__name__, static_folder=None)
 app.secret_key = require_env("TRACKER_SECRET_KEY", 32)
@@ -162,7 +166,7 @@ def log(message):
 
 @app.before_request
 def pull_data():
-    if store.REMOTE and not request.path.startswith("/icon-") and request.path != "/manifest.webmanifest":
+    if store.REMOTE and not request.path.startswith("/icon-") and request.path not in ("/manifest.webmanifest", "/api/sync"):
         store.pull(CASH_HEADER)
 
 
@@ -503,6 +507,40 @@ def cash_delete(bid):
         abort(500)
     log(f"готівка видалена: {session['user']} {removed.splitlines()[0]}")
     return redirect("/cash")
+
+
+@app.post("/api/sync")
+def sync():
+    """Приймає transactions.beancount від push_data.sh. Доступ лише за токеном, у базу йде тільки перевірений облік."""
+    if not store.REMOTE:
+        abort(404)
+    ip = request.remote_addr or "?"
+    if is_blocked(ip):
+        abort(429)
+    sent = request.headers.get("Authorization", "")
+    if not hmac.compare_digest(sent.encode(), f"Bearer {SYNC_TOKEN}".encode()):
+        note_fail(ip)
+        log(f"sync: невірний токен з {ip}")
+        time.sleep(0.5)
+        abort(401)
+    request.max_content_length = SYNC_LIMIT
+    try:
+        text = request.get_data().decode("utf-8")
+    except UnicodeDecodeError:
+        return "Файл не в UTF-8\n", 400
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "main.beancount").write_text((ROOT / "main.beancount").read_text(encoding="utf-8"), encoding="utf-8")
+        current = store.fetch(CASH_HEADER)
+        (tmp / "transactions.beancount").write_text(text, encoding="utf-8")
+        (tmp / "cash.beancount").write_text(current["cash.beancount"], encoding="utf-8")
+        _, errors, _ = loader.load_file(str(tmp / "main.beancount"))
+    if errors:
+        log(f"sync відхилено, облік має помилку: {errors[0]}")
+        return f"Облік не пройшов перевірку, нічого не збережено: {errors[0]}\n", 422
+    store.push("transactions.beancount", text)
+    log(f"sync: transactions.beancount оновлено, {len(text.encode())} байт")
+    return f"Збережено transactions.beancount: {len(text.encode())} байт\n"
 
 
 @app.get("/manifest.webmanifest")

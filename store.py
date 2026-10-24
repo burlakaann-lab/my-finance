@@ -44,14 +44,16 @@ def prepare(root):
     shutil.copyfile(Path(root) / "main.beancount", WORKDIR / "main.beancount")
 
 
-def pull(cash_header):
-    """Кладе актуальні файли з бази у тимчасову папку."""
+def fetch(cash_header):
+    """Повертає актуальний вміст обох файлів з бази."""
     ensure_table()
     stored = {row["name"]: row["body"] for row in sql("SELECT name, body FROM ledger_files")}
-    for name in NAMES:
-        text = stored.get(name)
-        if text is None:
-            text = cash_header if name == "cash.beancount" else ""
+    return {name: stored.get(name, cash_header if name == "cash.beancount" else "") for name in NAMES}
+
+
+def pull(cash_header):
+    """Кладе актуальні файли з бази у тимчасову папку."""
+    for name, text in fetch(cash_header).items():
         path = WORKDIR / name
         if not path.exists() or path.read_text(encoding="utf-8") != text:
             path.write_text(text, encoding="utf-8")
