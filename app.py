@@ -286,6 +286,10 @@ ADD_FORM = """
   <select id="category" name="category" required>
     {% for account, name in categories %}<option value="{{ account }}" {{ 'selected' if account == form.category }}>{{ name }}</option>{% endfor %}
   </select>
+  {% if owners %}<label for="owner">Чия витрата</label>
+  <select id="owner" name="owner">
+    {% for o in owners %}<option value="{{ o }}" {{ 'selected' if o == form.owner }}>{{ o }}</option>{% endfor %}
+  </select>{% endif %}
   <label for="description">Що це (необовʼязково)</label>
   <input id="description" name="description" maxlength="60" autocomplete="off" value="{{ form.description }}">
   <label for="day">Дата</label>
@@ -321,14 +325,20 @@ ADDED = """
 
 def add_page(error=None, form=None, status=200, heading="Додати готівку", action="/add", button="Додати", delete_action=None):
     accounts = expense_accounts()
-    form = form or {"amount": "", "category": accounts[0], "description": "", "day": date.today().isoformat()}
+    form = form or {"amount": "", "category": accounts[0], "description": "", "day": date.today().isoformat(),
+                    "owner": "Оля"}
+    form.setdefault("owner", "Оля")
     return page(heading, ADD_FORM, status, csrf=csrf_token(), error=error, form=form,
+                owners=OWNERS if session.get("user") == "Тест" else None,
                 heading=heading, action=action, button=button, delete_action=delete_action,
                 categories=[(a, report.category_name(a)) for a in accounts],
                 start=START_DATE.isoformat(), today=date.today().isoformat())
 
 
-def parse_cash_form(form, accounts):
+OWNERS = ["Оля", "Марко"]
+
+
+def parse_cash_form(form, accounts, owner):
     """Повертає (дані, помилка). Усе, що йде у файл обліку, проходить сувору перевірку."""
     raw_amount = form.get("amount", "").replace(" ", "").replace(",", ".")
     if not re.fullmatch(r"\d{1,6}(\.\d{1,2})?", raw_amount):
@@ -346,13 +356,17 @@ def parse_cash_form(form, accounts):
     if not START_DATE <= day <= date.today():
         return None, "Дата має бути від 1 серпня 2026 до сьогодні."
     description = re.sub(r'[\x00-\x1f"\\]', " ", form.get("description", "")).strip()[:60] or "Готівка"
+    if session.get("user") == "Тест":  # тестовий вхід сам обирає, чия це витрата
+        owner = form.get("owner", "")
+        if owner not in OWNERS:
+            return None, "Оберіть, чия це витрата."
     return {"amount": amount.quantize(Decimal("0.01")), "category": category, "day": day,
-            "description": description}, None
+            "description": description, "owner": owner}, None
 
 
 def format_entry(data, user):
     amount = f"{data['amount']:.2f}"
-    tag = " #marko" if user == "Марко" else ""
+    tag = " #marko" if data["owner"] == "Марко" else ""
     return (f'{data["day"].isoformat()} * "{data["description"]}"{tag}\n'
             f'  added-by: "{user}"\n'
             f'  {data["category"]}  {amount} PLN\n'
@@ -398,9 +412,9 @@ def add_form():
 @login_required
 def add_submit():
     check_csrf()
-    data, error = parse_cash_form(request.form, expense_accounts())
+    data, error = parse_cash_form(request.form, expense_accounts(), session["user"])
     if error:
-        return add_page(error, {"amount": request.form.get("amount", ""), "category": request.form.get("category", ""),
+        return add_page(error, {"owner": request.form.get("owner", "Оля"), "amount": request.form.get("amount", ""), "category": request.form.get("category", ""),
                                 "description": request.form.get("description", ""),
                                 "day": request.form.get("day", "")}, 400)
     try:
@@ -426,11 +440,11 @@ def block_id(block):
 
 
 def parse_block(block):
-    m = re.match(r'(\d{4}-\d\d-\d\d) \* "(.*?)"(?: #\w+)*\n\s+added-by: "(.*)"\n\s+(Expenses:\S+)\s+(\d+\.\d\d) PLN', block)
+    m = re.match(r'(\d{4}-\d\d-\d\d) \* "(.*?)"((?: #\w+)*)\n\s+added-by: "(.*)"\n\s+(Expenses:\S+)\s+(\d+\.\d\d) PLN', block)
     if not m:
         return None
-    return {"day": date.fromisoformat(m[1]), "description": m[2], "user": m[3], "category": m[4],
-            "amount": Decimal(m[5])}
+    return {"day": date.fromisoformat(m[1]), "description": m[2], "owner": "Марко" if "#marko" in m[3] else "Оля",
+            "user": m[4], "category": m[5], "amount": Decimal(m[6])}
 
 
 def save_cash(header, blocks):
@@ -459,7 +473,8 @@ def cash_list():
             continue
         total += d["amount"]
         rows.append({"id": block_id(b), "day": d["day"].strftime("%d.%m.%Y"), "description": d["description"],
-                     "category": report.category_name(d["category"]), "user": d["user"],
+                     "category": report.category_name(d["category"]),
+                     "user": d["user"] if d["user"] == d["owner"] else f"{d['user']} → {d['owner']}",
                      "amount": f"{d['amount']:.2f}".replace(".", ","), "d": d["day"]})
     rows.sort(key=lambda r: r["d"], reverse=True)
     return page("Готівкові витрати", CASH_LIST, rows=rows, total=f"{total:.2f}".replace(".", ","))
@@ -470,7 +485,7 @@ def edit_page(bid, error=None, form=None, status=200):
     d = parse_block(blocks[i])
     form = form or {"amount": f"{d['amount']:.2f}".replace(".", ","), "category": d["category"],
                     "description": "" if d["description"] == "Готівка" else d["description"],
-                    "day": d["day"].isoformat()}
+                    "day": d["day"].isoformat(), "owner": d["owner"]}
     return add_page(error, form, status, heading="Змінити готівку", action=f"/cash/{bid}/edit",
                     button="Зберегти", delete_action=f"/cash/{bid}/delete")
 
@@ -487,9 +502,9 @@ def cash_edit(bid):
     check_csrf()
     header, blocks, i = find_block(bid)
     old = parse_block(blocks[i])
-    data, error = parse_cash_form(request.form, expense_accounts())
+    data, error = parse_cash_form(request.form, expense_accounts(), old["owner"])
     if error:
-        return edit_page(bid, error, {k: request.form.get(k, "") for k in ("amount", "category", "description", "day")}, 400)
+        return edit_page(bid, error, {k: request.form.get(k, "") for k in ("amount", "category", "description", "day", "owner")}, 400)
     blocks[i] = format_entry(data, old["user"]).strip("\n")
     try:
         save_cash(header, blocks)
