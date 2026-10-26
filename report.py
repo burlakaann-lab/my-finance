@@ -241,8 +241,8 @@ footer{color:var(--muted);font-size:.85rem;margin-top:24px}
 JS = """
 (function(){
   var views=[].slice.call(document.querySelectorAll('.views button'));
-  var navs=[].slice.call(document.querySelectorAll('nav.tabs'));
-  var months=[].slice.call(document.querySelectorAll('.tabs button'));
+  var navs=[].slice.call(document.querySelectorAll('nav.tabs[data-view]'));
+  var months=[].slice.call(document.querySelectorAll('nav.tabs[data-view] button'));
   var sections=[].slice.call(document.querySelectorAll('.month'));
   function show(id){
     var view=id.split('-m-')[0];
