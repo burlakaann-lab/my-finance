@@ -1,4 +1,4 @@
-"""Одна команда перевірки: bean-check і звірка з контрольними цифрами Олі (цифри Марка лише друкуємо).
+"""Одна команда перевірки: bean-check і звірка з контрольними цифрами Олі й Марка.
 
 Запуск: uv run python check.py
 Готівку з cash.beancount не враховуємо: контрольні цифри Олі рахувалися без неї.
@@ -23,6 +23,8 @@ EXPECTED = {
     (2026, 9): ("9800.00", "6090.91", "3709.09", "37.8", "3508.49", "2582.42"),
     (2026, 10): ("9800.00", "4978.05", "4821.95", "49.2", "3463.49", "1514.56"),
 }
+# Контрольні цифри Марка з умови завдання: змінні витрати (серпень, вересень). Решту його цифр лише друкуємо.
+EXPECTED_MARKO_VARIABLE = {(2026, 8): Decimal("1855.57"), (2026, 9): Decimal("2432.83")}
 OPERATIONS = {"olya": 142, "marko": 109}
 
 print("1. bean-check main.beancount")
@@ -67,10 +69,16 @@ if len(views["olya"]) != len(EXPECTED):
     ok = False
     print("   Кількість місяців не збігається")
 
-print("\n3. Марко (зл, без готівки): контрольних цифр немає, лише цифри з обліку")
+print("\n3. Марко (зл, без готівки): контрольні тільки змінні витрати за серпень і вересень")
 print(header)
 for m in views["marko"]:
-    print(row_text(m, figures(m)))
+    want = EXPECTED_MARKO_VARIABLE.get((m["year"], m["month"]))
+    note = ""
+    if want is not None:
+        good = abs(m["variable"] - want) < Decimal("0.005")
+        ok = ok and good
+        note = "  змінні збігаються" if good else f"  ЗМІННІ НЕ ЗБІГАЮТЬСЯ, мало бути {want}"
+    print(row_text(m, figures(m)) + note)
 
 print("\n4. Оля + Марко = Разом")
 for key in ("income", "expenses", "fixed", "variable"):
