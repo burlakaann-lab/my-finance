@@ -9,7 +9,7 @@
 - Після кожної зміни в обліку (`main.beancount`, `transactions.beancount`, `cash.beancount`, `import.py`, `rules.csv`) запускай `uv run bean-check main.beancount`. Зміна не готова, доки перевірка не пройде без жодного повідомлення. Показуй людині результат перевірки.
 - «Готово» означає, що перевірка пройшла, а не що код написано.
 - Після кожного завершеного кроку онови `PROGRESS.md` і зроби коміт у git з коротким описом українською.
-- У git ніколи не потрапляють `data/`, `transactions.beancount`, `cash.beancount`, `report.html` і `.env`: у справжньому проєкті там особисті фінанси. `rules.csv` комітимо.
+- У git ніколи не потрапляють `report.html` і `.env`. Файли `data/*.csv`, `transactions.beancount` і порожній `cash.beancount` комітимо лише тому, що це штучні дані із завдання: так чистий клон проходить `check.py`. У справжньому проєкті з особистими фінансами їх у git не кладуть. Локальний `cash.beancount` з готівкою в git не оновлюємо (`git update-index --skip-worktree cash.beancount`). `rules.csv` комітимо.
 
 ## Інструменти
 - Python-середовище вже налаштоване через uv (`pyproject.toml`). Усе запускай лише через `uv run …`: `uv run bean-check`, `uv run bean-query`, `uv run fava`, `uv run python …`. Нових пакетів без дозволу людини не встановлюй.
