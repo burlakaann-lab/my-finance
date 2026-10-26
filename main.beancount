@@ -1,7 +1,8 @@
-option "title" "Фінанси Олі"
+option "title" "Фінанси Олі і Марка"
 option "operating_currency" "PLN"
 
 2026-07-31 open Assets:Банк                  PLN
+2026-07-31 open Assets:Банк-Марко            PLN
 2026-07-31 open Assets:Готівка               PLN
 2026-07-31 open Equity:Початковий-Залишок    PLN
 
@@ -17,11 +18,18 @@ option "operating_currency" "PLN"
 2026-07-31 open Expenses:Побут               PLN
 2026-07-31 open Expenses:Спорт               PLN
 2026-07-31 open Expenses:Телефон             PLN
+2026-07-31 open Expenses:Інтернет            PLN
+2026-07-31 open Expenses:Комунальні          PLN
+2026-07-31 open Expenses:Розваги             PLN
 2026-07-31 open Expenses:Без-Категорії       PLN
 
 2026-07-31 * "Початковий залишок"
   Assets:Банк                 4500.00 PLN
   Equity:Початковий-Залишок  -4500.00 PLN
+
+2026-07-31 * "Початковий залишок Марка"
+  Assets:Банк-Марко           2860.40 PLN
+  Equity:Початковий-Залишок  -2860.40 PLN
 
 ; Збережені запити. Місяць 10 неповний: дивіться дату останньої операції в запиті 2.
 

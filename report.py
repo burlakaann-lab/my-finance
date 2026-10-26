@@ -36,18 +36,33 @@ def category_name(account):
     return account.removeprefix("Expenses:").replace("-", " ")
 
 
-def run_saved_queries():
+# Вигляд звіту -> (назва, умова для запитів). Операції Марка мають тег #marko, решта — Олі.
+VIEWS = {"olya": ("Оля", "'marko' NOT IN tags"), "marko": ("Марко", "'marko' IN tags"), "joint": ("Разом", None)}
+
+
+def run_saved_queries(views=("joint",)):
+    """Виконує збережені запити для кожного вигляду: {вигляд: {запит: рядки}}."""
     entries, errors, _ = loader.load_file(str(LEDGER))
     if errors:
         raise SystemExit(f"main.beancount має помилки, спершу виправте їх: {errors[0]}")
     sql = {e.name: e.query_string for e in entries if isinstance(e, Query)}
     conn = beanquery.connect(f"beancount:{LEDGER}")
     result = {}
-    for name in (Q_CATEGORIES, Q_SAVINGS, Q_FIXED):
-        cursor = conn.execute(sql[name])
-        columns = [c.name for c in cursor.description]
-        result[name] = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    for view in views:
+        condition = VIEWS[view][1]
+        result[view] = {}
+        for name in (Q_CATEGORIES, Q_SAVINGS, Q_FIXED):
+            query = sql[name].replace("WHERE ", f"WHERE {condition} AND ", 1) if condition else sql[name]
+            cursor = conn.execute(query)
+            columns = [c.name for c in cursor.description]
+            result[view][name] = [dict(zip(columns, row)) for row in cursor.fetchall()]
     return result
+
+
+def build_views(views=("olya", "marko", "joint")):
+    """{вигляд: місяці}. Порядок вигляду в словнику = порядок вкладок."""
+    data = run_saved_queries(views)
+    return {view: build_months(data[view]) for view in views}
 
 
 def build_months(data):
@@ -127,9 +142,9 @@ def cushion(months, upto_index):
     return saved, avg, float(saved / avg)
 
 
-def month_section(months, i):
+def month_section(months, i, view):
     m = months[i]
-    mid = f'm-{m["year"]}-{m["month"]:02d}'
+    mid = f'{view}-m-{m["year"]}-{m["month"]:02d}'
     name = MONTH_NOM[m["month"]]
     notice = ""
     if m["partial"]:
@@ -137,9 +152,20 @@ def month_section(months, i):
                   f'Цифри нижче ще можуть змінитися.</p>')
 
     saved_now, avg, months_cov = cushion(months, i)
-    savings_note = f"Відкладено {money(m['saved'])} із {money(m['income'])} доходу."
-    if m["partial"]:
+    has_income = m["income"] > 0 and m["rate"] is not None
+    if not has_income:
+        savings_note = f"У цьому місяці доходу ще не було, тому норму заощаджень не рахуємо. Витрати: {money(m['expenses'])}."
+    elif m["saved"] < 0:
+        savings_note = f"Витрати перевищили дохід на {money(-m['saved'])}."
+    else:
+        savings_note = f"Відкладено {money(m['saved'])} із {money(m['income'])} доходу."
+    if m["partial"] and has_income:
         savings_note += " Витрат за місяць ще не всі, тож відсоток поки завищений."
+    savings_chart = ""
+    if has_income and m["saved"] >= 0:
+        savings_chart = (split_svg([("bar-a", m["expenses"]), ("bar-b", m["saved"])], m["income"], "Дохід: витрати і відкладене")
+                         + legend([("bar-a", "Витрати", money(m["expenses"])), ("bar-b", "Відкладено", money(m["saved"]))]))
+    rate_text = f'{num(float(m["rate"]))}%' if has_income else "—"
     cushion_line = (f"Відкладене з серпня ({money(saved_now)}) покриває {num(months_cov)} міс. витрат "
                     f"(середні витрати повного місяця {money(avg)}), мета — {TARGET_MONTHS}.")
 
@@ -150,8 +176,8 @@ def month_section(months, i):
         fixed_note += " Частина фіксованих платежів ще не списана."
 
     return f"""
-<section class="month" id="{mid}" data-month="{mid}">
-  <h2 class="sr">{name} {m["year"]}</h2>
+<section class="month" id="{mid}" data-month="{mid}" hidden>
+  <h2 class="sr">{VIEWS[view][0]}: {name} {m["year"]}</h2>
   {notice}
   <article class="card">
     <h3>1. Куди йдуть гроші</h3>
@@ -162,10 +188,9 @@ def month_section(months, i):
   </article>
   <article class="card">
     <h3>2. Скільки відкладено</h3>
-    <p class="big">{num(float(m["rate"]))}%</p>
+    <p class="big">{rate_text}</p>
     <p class="sub">доходу відкладено (норма заощаджень)</p>
-    {split_svg([("bar-a", m["expenses"]), ("bar-b", m["saved"])], m["income"], "Дохід: витрати і відкладене")}
-    {legend([("bar-a", "Витрати", money(m["expenses"])), ("bar-b", "Відкладено", money(m["saved"]))])}
+    {savings_chart}
     <p class="concl">{savings_note}</p>
     <p class="note">{cushion_line}</p>
   </article>
@@ -192,6 +217,9 @@ h1{font-size:1.5rem;margin:0}
 .tabs button{font:inherit;padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
 .tabs button[aria-pressed=true]{background:var(--a);border-color:var(--a);color:var(--accent-text);font-weight:600}
 .tabs small{opacity:.85}
+.views{margin-bottom:8px}
+.views button{font-weight:600}
+[hidden]{display:none!important}
 .notice{background:var(--warn-bg);color:var(--warn-text);padding:10px 14px;border-radius:8px;margin:0 0 16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px;margin-bottom:16px}
 h3{font-size:1rem;margin:0 0 8px;color:var(--muted);font-weight:600}
@@ -212,32 +240,47 @@ footer{color:var(--muted);font-size:.85rem;margin-top:24px}
 
 JS = """
 (function(){
+  var views=[].slice.call(document.querySelectorAll('.views button'));
+  var navs=[].slice.call(document.querySelectorAll('nav.tabs'));
+  var months=[].slice.call(document.querySelectorAll('.tabs button'));
   var sections=[].slice.call(document.querySelectorAll('.month'));
-  var buttons=[].slice.call(document.querySelectorAll('.tabs button'));
   function show(id){
+    var view=id.split('-m-')[0];
     sections.forEach(function(s){s.hidden=s.dataset.month!==id;});
-    buttons.forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.month===id));});
+    navs.forEach(function(n){n.hidden=n.dataset.view!==view;});
+    months.forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.month===id));});
+    views.forEach(function(b){b.setAttribute('aria-pressed',String(b.dataset.view===view));});
   }
-  buttons.forEach(function(b){b.addEventListener('click',function(){show(b.dataset.month);try{history.replaceState(null,'','#'+b.dataset.month);}catch(e){}});});
+  views.forEach(function(b){b.addEventListener('click',function(){show(b.dataset.default);});});
+  months.forEach(function(b){b.addEventListener('click',function(){show(b.dataset.month);try{history.replaceState(null,'','#'+b.dataset.month);}catch(e){}});});
   var start=location.hash.slice(1);
-  if(!sections.some(function(s){return s.dataset.month===start;})){start=document.body.dataset.default;}
+  if(!sections.some(function(s){return s.dataset.month===start;})){start=views[0].dataset.default;}
   show(start);
 })();
 """
 
 
-def build_html(months):
-    first, last = date(months[0]["year"], months[0]["month"], 1), months[-1]["last_date"]
-    default_i = max((i for i, m in enumerate(months) if not m["partial"]), default=len(months) - 1)
-    tabs = []
-    for m in months:
-        mid = f'm-{m["year"]}-{m["month"]:02d}'
-        label = MONTH_NOM[m["month"]]
-        if m["partial"]:
-            label += f' <small>· неповний, до {m["last_date"].day:02d}.{m["last_date"].month:02d}</small>'
-        tabs.append(f'<button type="button" data-month="{mid}" aria-pressed="false">{label}</button>')
-    default_id = f'm-{months[default_i]["year"]}-{months[default_i]["month"]:02d}'
-    sections = "".join(month_section(months, i) for i in range(len(months)))
+def month_id(view, m):
+    return f'{view}-m-{m["year"]}-{m["month"]:02d}'
+
+
+def build_html(views):
+    """views: {вигляд: місяці}. Перший вигляд відкривається першим."""
+    any_months = next(iter(views.values()))
+    first, last = date(any_months[0]["year"], any_months[0]["month"], 1), any_months[-1]["last_date"]
+    view_buttons, navs, sections = [], [], []
+    for view, months in views.items():
+        default_i = max((i for i, m in enumerate(months) if not m["partial"]), default=len(months) - 1)
+        view_buttons.append(f'<button type="button" data-view="{view}" data-default="{month_id(view, months[default_i])}" '
+                            f'aria-pressed="false">{VIEWS[view][0]}</button>')
+        tabs = []
+        for m in months:
+            label = MONTH_NOM[m["month"]]
+            if m["partial"]:
+                label += f' <small>· неповний, до {m["last_date"].day:02d}.{m["last_date"].month:02d}</small>'
+            tabs.append(f'<button type="button" data-month="{month_id(view, m)}" aria-pressed="false">{label}</button>')
+        navs.append(f'<nav class="tabs" data-view="{view}" aria-label="Місяць: {VIEWS[view][0]}" hidden>{"".join(tabs)}</nav>')
+        sections.append("".join(month_section(months, i, view) for i in range(len(months))))
     return f"""<!doctype html>
 <html lang="uk">
 <head>
@@ -246,12 +289,13 @@ def build_html(months):
 <title>Фінанси Олі і Марка</title>
 <style>{CSS}</style>
 </head>
-<body data-default="{default_id}">
+<body>
 <main>
   <h1>Фінанси Олі і Марка</h1>
   <p class="period">Дані з {day_label(first)} до {day_label(last)} {last.year}. Усі суми в злотих.</p>
-  <nav class="tabs" aria-label="Місяць">{''.join(tabs)}</nav>
-  {sections}
+  <nav class="tabs views" aria-label="Чиї гроші">{"".join(view_buttons)}</nav>
+  {"".join(navs)}
+  {"".join(sections)}
   <footer>Звіт зібраний скриптом report.py зі збережених запитів у main.beancount.</footer>
 </main>
 <script>{JS}</script>
@@ -261,9 +305,9 @@ def build_html(months):
 
 
 def main():
-    months = build_months(run_saved_queries())
-    OUTPUT.write_text(build_html(months), encoding="utf-8")
-    print(f"Записано {OUTPUT.name}: {len(months)} місяців")
+    views = build_views()
+    OUTPUT.write_text(build_html(views), encoding="utf-8")
+    print(f"Записано {OUTPUT.name}: {len(views)} вигляди, по {len(next(iter(views.values())))} місяців")
 
 
 if __name__ == "__main__":

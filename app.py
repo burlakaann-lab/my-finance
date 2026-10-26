@@ -253,12 +253,14 @@ def appbar(user):
 @app.get("/")
 @login_required
 def home():
+    # Кожен бачить свої гроші і спільні: Олі — «Оля» і «Разом», Марку — «Марко» і «Разом».
+    mine = "marko" if session["user"] == "Марко" else "olya"
     try:
-        months = report.build_months(report.run_saved_queries())
+        views = report.build_views((mine, "joint"))
     except SystemExit as exc:
         log(f"помилка обліку: {exc}")
         return page("Помилка", "<h1>Облік має помилку</h1><p>Запустіть bean-check і виправте її.</p>", 500)
-    doc = report.build_html(months)
+    doc = report.build_html(views)
     doc = doc.replace("</head>", APPBAR_CSS + "</head>", 1).replace("<main>", appbar(session["user"]) + "<main>", 1)
     return doc
 
@@ -347,7 +349,8 @@ def parse_cash_form(form, accounts):
 
 def format_entry(data, user):
     amount = f"{data['amount']:.2f}"
-    return (f'{data["day"].isoformat()} * "{data["description"]}"\n'
+    tag = " #marko" if user == "Марко" else ""
+    return (f'{data["day"].isoformat()} * "{data["description"]}"{tag}\n'
             f'  added-by: "{user}"\n'
             f'  {data["category"]}  {amount} PLN\n'
             f'  {CASH_ACCOUNT}  -{amount} PLN\n')
@@ -420,7 +423,7 @@ def block_id(block):
 
 
 def parse_block(block):
-    m = re.match(r'(\d{4}-\d\d-\d\d) \* "(.*)"\n\s+added-by: "(.*)"\n\s+(Expenses:\S+)\s+(\d+\.\d\d) PLN', block)
+    m = re.match(r'(\d{4}-\d\d-\d\d) \* "(.*?)"(?: #\w+)*\n\s+added-by: "(.*)"\n\s+(Expenses:\S+)\s+(\d+\.\d\d) PLN', block)
     if not m:
         return None
     return {"day": date.fromisoformat(m[1]), "description": m[2], "user": m[3], "category": m[4],
