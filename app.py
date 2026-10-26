@@ -56,6 +56,9 @@ def require_env(name, min_len):
 
 
 USERS = {"Оля": require_env("OLYA_PASSWORD", 12), "Марко": require_env("MARKO_PASSWORD", 12)}
+# Тестовий вхід для перевіряючих: бачить усі три вигляди звіту. Є лише там, де задано TEST_PASSWORD.
+if os.environ.get("TEST_PASSWORD"):
+    USERS["Тест"] = require_env("TEST_PASSWORD", 12)
 
 SYNC_TOKEN = require_env("SYNC_TOKEN", 32) if store.REMOTE else ""
 SYNC_LIMIT = 2 * 1024 * 1024
@@ -253,10 +256,10 @@ def appbar(user):
 @app.get("/")
 @login_required
 def home():
-    # Кожен бачить свої гроші і спільні: Олі — «Оля» і «Разом», Марку — «Марко» і «Разом».
-    mine = "marko" if session["user"] == "Марко" else "olya"
+    # Кожен бачить свої гроші і спільні: Олі — «Оля» і «Разом», Марку — «Марко» і «Разом», тестовий вхід — усе.
+    shown = {"Марко": ("marko", "joint"), "Тест": ("olya", "marko", "joint")}.get(session["user"], ("olya", "joint"))
     try:
-        views = report.build_views((mine, "joint"))
+        views = report.build_views(shown)
     except SystemExit as exc:
         log(f"помилка обліку: {exc}")
         return page("Помилка", "<h1>Облік має помилку</h1><p>Запустіть bean-check і виправте її.</p>", 500)
